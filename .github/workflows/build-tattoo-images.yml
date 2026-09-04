@@ -9,23 +9,22 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Fetch public tattoo sources
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out/highres/male out/highres/female out/noxify out/sincity
+          mkdir -p out/highres/male out/highres/female out/noxify/stream out/sincity/stream
 
-          git clone --depth 1 https://github.com/doiska/fivem-tattoo-shop.git /tmp/doiska
-          git clone --depth 1 https://github.com/untraceabledev/Noxify4.0TurkishScammer.git /tmp/noxify
-          git clone --depth 1 https://github.com/lnfernous/resources-frommain.git /tmp/resources
-
+          # Doiska: catálogo moderno + previews em alta resolução.
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/doiska/fivem-tattoo-shop.git /tmp/doiska
+          git -C /tmp/doiska sparse-checkout set config shared/assets web/public/tattoos
           cp /tmp/doiska/config/tattoos.json out/doiska_tattoos.json
           cp /tmp/doiska/shared/assets/zone_new_tattoos.json out/doiska_zone_new_tattoos.json
 
           python - <<'PY'
-          import json, pathlib, shutil, os
+          import json, pathlib, shutil
           src=pathlib.Path('/tmp/doiska/web/public/tattoos')
           data=json.load(open('/tmp/doiska/config/tattoos.json'))
           out=pathlib.Path('out/highres')
@@ -37,8 +36,7 @@ jobs:
                   continue
               for sex,key in [('male','hashMale'),('female','hashFemale')]:
                   h=e.get(key) or ''
-                  if not h:
-                      continue
+                  if not h: continue
                   dst=out/sex/(h+'.webp')
                   if not dst.exists():
                       shutil.copy2(p,dst); copied+=1
@@ -46,16 +44,26 @@ jobs:
           print('male',len(list((out/'male').glob('*.webp'))),'female',len(list((out/'female').glob('*.webp'))))
           PY
 
-          NP='/tmp/noxify/GTAServerFXS/server-data/resources/[assets]/np_tattoos'
-          cp "$NP/nikeztattoos_overlays.xml" out/noxify/
-          cp "$NP/shop_tattoo.meta" out/noxify/
-          cp "$NP/cl_names.lua" out/noxify/
-          cp -r "$NP/stream" out/noxify/
+          # NoPixel/Nikez public addon pack: fetch somente os arquivos necessários.
+          NP_BASE='https://raw.githubusercontent.com/untraceabledev/Noxify4.0TurkishScammer/main/GTAServerFXS/server-data/resources/%5Bassets%5D/np_tattoos'
+          curl -L --fail --retry 3 "$NP_BASE/nikeztattoos_overlays.xml" -o out/noxify/nikeztattoos_overlays.xml
+          curl -L --fail --retry 3 "$NP_BASE/shop_tattoo.meta" -o out/noxify/shop_tattoo.meta
+          curl -L --fail --retry 3 "$NP_BASE/cl_names.lua" -o out/noxify/cl_names.lua
+          for f in \
+            nikez_tat_5starlemons.ytd nikez_tat_athena.ytd nikez_tat_cheq.ytd nikez_tat_drip.ytd \
+            nikez_tat_faucet.ytd nikez_tat_huginn_l.ytd nikez_tat_huginn_r.ytd nikez_tat_lil_faucet.ytd \
+            nikez_tat_norse_woman.ytd nikez_tat_oden.ytd nikez_tat_sdsofingers.ytd nikez_tat_seaside_big_spear.ytd \
+            nikez_tat_seaside_color.ytd nikez_tat_seaside_gray.ytd nikez_tat_seaside_gray_waves.ytd nikez_tat_ten3.ytd; do
+            curl -L --fail --retry 3 "$NP_BASE/stream/$f" -o "out/noxify/stream/$f"
+          done
 
-          cp /tmp/resources/rcore_addon_tattoos_sincity/rcore_overlays_sincity.xml out/sincity/
-          cp /tmp/resources/rcore_addon_tattoos_sincity/fxmanifest.lua out/sincity/
-          cp -r /tmp/resources/rcore_addon_tattoos_sincity/stream out/sincity/
-          cp /tmp/resources/rcore_tattoo/assets/tattooLists/rcoreAddonTattoos_sincity.json out/sincity/
+          # RCore SinCity public sample addon pack.
+          SC_BASE='https://raw.githubusercontent.com/lnfernous/resources-frommain/main/rcore_addon_tattoos_sincity'
+          curl -L --fail --retry 3 "$SC_BASE/rcore_overlays_sincity.xml" -o out/sincity/rcore_overlays_sincity.xml
+          curl -L --fail --retry 3 'https://raw.githubusercontent.com/lnfernous/resources-frommain/main/rcore_tattoo/assets/tattooLists/rcoreAddonTattoos_sincity.json' -o out/sincity/rcoreAddonTattoos_sincity.json
+          for f in chest_stomach.ytd chicano_front.ytd chicanoback.ytd chicfull.ytd leftarmsleeve.ytd necktattoo.ytd rightarmsleeve.ytd sidefillin.ytd ster_dream.ytd; do
+            curl -L --fail --retry 3 "$SC_BASE/stream/$f" -o "out/sincity/stream/$f"
+          done
 
           echo '--- sizes ---'
           du -sh out/*
