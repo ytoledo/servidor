@@ -1,0 +1,59 @@
+name: Collect Remaining Exact Tattoo Previews
+
+on:
+  push:
+    paths:
+      - '.github/workflows/collect-remaining-exact-previews.yml'
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download exact hash previews
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/male out/female
+          BASE='https://cdn.fivemetstore.com/realidadepaulista/imagens/nation_tattoos'
+          male=(
+            MP_Gunrunning_Tattoo_003_M mpHeist3_Tat_005_M MP_MP_Stunt_tat_028_M MP_MP_Stunt_tat_031_M
+            MP_Vinewood_Tat_020_M FM_Tat_Award_M_006 FM_Tat_M_007 FM_Tat_M_017 FM_Tat_M_022
+            FM_Tat_M_039 FM_Tat_M_040 FM_Tat_M_042
+          )
+          female=(
+            mpHeist3_Tat_005_F FM_Tat_F_000 MP_Vinewood_Tat_020_F FM_Tat_Award_F_006 FM_Tat_F_007
+            FM_Tat_F_017 FM_Tat_F_022 FM_Tat_F_039 FM_Tat_F_040 FM_Tat_F_042
+          )
+          failed=0
+          for h in "${male[@]}"; do
+            if ! curl -L --fail --retry 3 --connect-timeout 10 "$BASE/male/$h.png" -o "out/male/$h.png"; then
+              rm -f "out/male/$h.png"; echo "MISS male $h"; failed=$((failed+1));
+            fi
+          done
+          for h in "${female[@]}"; do
+            if ! curl -L --fail --retry 3 --connect-timeout 10 "$BASE/female/$h.png" -o "out/female/$h.png"; then
+              rm -f "out/female/$h.png"; echo "MISS female $h"; failed=$((failed+1));
+            fi
+          done
+          python - <<'PY'
+          from pathlib import Path
+          import imghdr
+          for p in Path('out').rglob('*.png'):
+              b=p.read_bytes()
+              if not b.startswith(b'\x89PNG\r\n\x1a\n'):
+                  raise SystemExit(f'not PNG: {p}')
+              print(p, len(b))
+          PY
+          echo "failed=$failed"
+          find out -type f | wc -l
+
+      - name: Upload remaining exact previews
+        uses: actions/upload-artifact@v4
+        with:
+          name: remaining-exact-previews
+          path: out
+          compression-level: 6
+          if-no-files-found: error
+          retention-days: 1
