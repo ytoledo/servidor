@@ -1,0 +1,112 @@
+name: Build GTA V clothing image ZIPs
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-clothes-zips.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Clone image database
+        run: |
+          git clone --depth 1 --single-branch --branch master https://github.com/Reizenkun/gtav-fivem-clothes.git source
+
+      - name: Split images into ZIPs below 200 MB
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile, os, hashlib, json
+
+          src = Path('source/renders')
+          out = Path('out')
+          out.mkdir(exist_ok=True)
+
+          # 185 MB decimal leaves a generous margin for ZIP central-directory overhead.
+          TARGET = 185_000_000
+          HARD_MAX = 200_000_000
+
+          files = []
+          for gender in ('male', 'female'):
+              root = src / gender
+              if not root.exists():
+                  continue
+              for p in root.rglob('*.webp'):
+                  if p.is_file():
+                      rel = p.relative_to(src)
+                      files.append((str(rel).replace('\\','/'), p, p.stat().st_size))
+
+          files.sort(key=lambda x: x[0])
+          if not files:
+              raise SystemExit('No WEBP files found')
+
+          groups, current, current_size = [], [], 0
+          # Add a conservative 200 bytes per entry for ZIP headers/names.
+          for rel, p, size in files:
+              estimated = size + 200 + len(rel) * 2
+              if current and current_size + estimated > TARGET:
+                  groups.append(current)
+                  current, current_size = [], 0
+              current.append((rel, p, size))
+              current_size += estimated
+          if current:
+              groups.append(current)
+
+          summary = []
+          for i, group in enumerate(groups, 1):
+              zpath = out / f'CREATIVE_NETWORK_ROUPAS_NATIVAS_IMAGENS_PARTE_{i:02d}.zip'
+              # WEBP is already compressed; STORE is deterministic and avoids CPU waste.
+              with zipfile.ZipFile(zpath, 'w', compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+                  for rel, p, size in group:
+                      zf.write(p, arcname=rel)
+              actual = zpath.stat().st_size
+              if actual > HARD_MAX:
+                  raise SystemExit(f'{zpath.name} exceeded hard max: {actual} bytes')
+              sha = hashlib.sha256(zpath.read_bytes()).hexdigest()
+              summary.append({
+                  'file': zpath.name,
+                  'bytes': actual,
+                  'images': len(group),
+                  'sha256': sha,
+                  'first': group[0][0],
+                  'last': group[-1][0],
+              })
+              print(f'{zpath.name}: {actual/1_000_000:.2f} MB | {len(group)} images | {sha}')
+
+          (out / 'INDEX.json').write_text(json.dumps({
+              'source': 'Reizenkun/gtav-fivem-clothes',
+              'total_images': len(files),
+              'parts': summary,
+          }, indent=2), encoding='utf-8')
+          print(f'TOTAL: {len(files)} images in {len(groups)} ZIP parts')
+          PY
+
+      - name: Verify maximum size
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          bad=[]
+          for p in Path('out').glob('*.zip'):
+              if p.stat().st_size > 200_000_000:
+                  bad.append((p.name,p.stat().st_size))
+          if bad:
+              raise SystemExit(f'ZIPs over 200 MB: {bad}')
+          print('All ZIPs are <= 200 MB')
+          PY
+
+      - name: Upload prepared ZIPs
+        uses: actions/upload-artifact@v4
+        with:
+          name: creative-network-native-clothing-images
+          path: out/
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
