@@ -9,24 +9,40 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Download male and female tattoo previews
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p pack/male pack/female
+
+          # Source A - stable legacy pack.
           wget -q -r -np -nd -A '*.png' -e robots=off \
             -P pack/male \
             'https://cdn.fivemetstore.com/realidadepaulista/imagens/nation_tattoos/male/'
           wget -q -r -np -nd -A '*.png' -e robots=off \
             -P pack/female \
             'https://cdn.fivemetstore.com/realidadepaulista/imagens/nation_tattoos/female/'
+
+          # Source B - contains later GTA Online tattoo packs. Merge only missing files.
+          mkdir -p extra/male extra/female
+          wget -q -r -np -nd -A '*.png' -e robots=off \
+            -P extra/male \
+            'https://www.lamborghini788.online/nation_tattoos/male/' || true
+          wget -q -r -np -nd -A '*.png' -e robots=off \
+            -P extra/female \
+            'https://www.lamborghini788.online/nation_tattoos/female/' || true
+          cp -n extra/male/*.png pack/male/ 2>/dev/null || true
+          cp -n extra/female/*.png pack/female/ 2>/dev/null || true
+
           find pack/male -maxdepth 1 -type f -regex '.*/[-0-9]+\.png' -delete || true
           find pack/female -maxdepth 1 -type f -regex '.*/[-0-9]+\.png' -delete || true
+
           curl -L --fail --retry 3 \
             'https://raw.githubusercontent.com/wasabirobby/fivem-appearance/main/files/tattoos.json' \
             -o pack/tattoos.json
+
           echo "male=$(find pack/male -type f -name '*.png' | wc -l)"
           echo "female=$(find pack/female -type f -name '*.png' | wc -l)"
           test -s pack/tattoos.json
