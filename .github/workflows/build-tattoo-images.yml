@@ -24,8 +24,12 @@ jobs:
             'https://cdn.fivemetstore.com/realidadepaulista/imagens/nation_tattoos/female/'
           find pack/male -maxdepth 1 -type f -regex '.*/[-0-9]+\.png' -delete || true
           find pack/female -maxdepth 1 -type f -regex '.*/[-0-9]+\.png' -delete || true
+          curl -L --fail --retry 3 \
+            'https://raw.githubusercontent.com/wasabirobby/fivem-appearance/main/files/tattoos.json' \
+            -o pack/tattoos.json
           echo "male=$(find pack/male -type f -name '*.png' | wc -l)"
           echo "female=$(find pack/female -type f -name '*.png' | wc -l)"
+          test -s pack/tattoos.json
           du -sh pack
 
       - name: Upload tattoo images
