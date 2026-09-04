@@ -1,0 +1,63 @@
+name: Collect Exact Tattoo Previews
+
+on:
+  push:
+    paths:
+      - '.github/workflows/collect-exact-tattoo-previews.yml'
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Collect exact hash-named tattoo previews
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/nyo out/meta
+
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/nyoakaway/nyo_tattoo.git /tmp/nyo
+          git -C /tmp/nyo sparse-checkout set images
+
+          python - <<'PY'
+          from pathlib import Path
+          import shutil, json, hashlib
+
+          src=Path('/tmp/nyo/images')
+          out=Path('out/nyo')
+          index={}
+          conflicts={}
+          copied=0
+          for p in src.rglob('*'):
+              if not p.is_file() or p.suffix.lower() not in {'.jpg','.jpeg','.png','.webp'}:
+                  continue
+              name=p.name
+              key=p.stem.lower()
+              dst=out/name
+              if key in index:
+                  old=Path(index[key]['source'])
+                  if old.exists() and hashlib.sha256(old.read_bytes()).digest()!=hashlib.sha256(p.read_bytes()).digest():
+                      conflicts.setdefault(key,[]).append(str(p.relative_to(src)))
+                  continue
+              shutil.copy2(p,dst)
+              index[key]={'file':name,'source':str(p),'relative':str(p.relative_to(src))}
+              copied+=1
+          for v in index.values():
+              v.pop('source',None)
+          Path('out/meta/index.json').write_text(json.dumps(index,indent=2),encoding='utf-8')
+          Path('out/meta/conflicts.json').write_text(json.dumps(conflicts,indent=2),encoding='utf-8')
+          print('copied',copied,'conflicts',len(conflicts))
+          PY
+
+          du -sh out
+          find out/nyo -type f | wc -l
+
+      - name: Upload exact previews
+        uses: actions/upload-artifact@v4
+        with:
+          name: exact-tattoo-previews
+          path: out
+          compression-level: 6
+          if-no-files-found: error
+          retention-days: 1
