@@ -1,0 +1,92 @@
+name: Collect Security Tattoo Previews
+
+on:
+  push:
+    paths:
+      - '.github/workflows/collect-security-tattoo-previews.yml'
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download exact The Contract tattoo images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/male out/female
+          python - <<'PY'
+          import json, urllib.parse, urllib.request, pathlib, time
+
+          items = [
+            ('TorsoBack1-DollarGunsCrossed','026'),
+            ('TorsoBack2-SmokingBarrels','015'),
+            ('TorsoBack3-LosSantosTag','008'),
+            ('TorsoBackFull1-ChamberlainHills','014'),
+            ('TorsoBackFull2-BlessedBoombox','013'),
+            ('TorsoBackFull3-HoodHeart','004'),
+            ('TorsoChest1-NightOwl','018'),
+            ('TorsoChest2-KingoftheJungle','017'),
+            ('TorsoChest3-AllFromTheSameTree','016'),
+            ('TorsoStomach1-DavisFlames','025'),
+            ('TorsoStomach2-BeatboxSilhouette','024'),
+            ('Head1-BlackWidow','027'),
+            ('Head2-Hustle','002'),
+            ('Head3-BrightDiamond','001'),
+            ('LeftArm1-WeedKnuckles','019'),
+            ('LeftArm2-SerpentMic','011'),
+            ('LeftArm3-MusicIsTheRemedy','010'),
+            ('LeftArm4-SkeletonShot','006'),
+            ('RightArm1-DogFist','020'),
+            ('RightArm2-ZombieRhymes','012'),
+            ('RightArm3-Ascension','009'),
+            ('RightArm4-Ballas4Life','007'),
+            ('RightArm5-Peacock','005'),
+            ('RightArm6-HoodSkeleton','000'),
+            ('LeftLeg1-Trust','023'),
+            ('LeftLeg2-LSSmokingCartridges','022'),
+            ('RightLeg1-GraffitiSkull','021'),
+            ('RightLeg2-BandanaKnife','003'),
+          ]
+
+          api='https://gta.fandom.com/api.php'
+          headers={'User-Agent':'Mozilla/5.0 TattooCatalogBuilder/1.0'}
+          report=[]
+          for sex in ('Male','Female'):
+              for stem,num in items:
+                  title=f'File:TheContract-GTAOe-{sex}Tattoos-{stem}.png'
+                  qs=urllib.parse.urlencode({'action':'query','titles':title,'prop':'imageinfo','iiprop':'url','format':'json'})
+                  req=urllib.request.Request(api+'?'+qs,headers=headers)
+                  with urllib.request.urlopen(req,timeout=30) as r:
+                      data=json.load(r)
+                  page=next(iter(data['query']['pages'].values()))
+                  info=(page.get('imageinfo') or [{}])[0]
+                  url=info.get('url')
+                  if not url:
+                      raise RuntimeError(f'No image URL for {title}')
+                  suffix='_M' if sex=='Male' else '_F'
+                  target=pathlib.Path('out')/sex.lower()/f'MP_Security_Tat_{num}{suffix}.png'
+                  req=urllib.request.Request(url,headers=headers)
+                  with urllib.request.urlopen(req,timeout=60) as r:
+                      raw=r.read()
+                  if len(raw)<1000:
+                      raise RuntimeError(f'Image too small for {title}: {len(raw)}')
+                  target.write_bytes(raw)
+                  report.append({'sex':sex,'title':title,'hash':target.stem,'bytes':len(raw),'source':url})
+                  print(target, len(raw))
+                  time.sleep(0.05)
+          pathlib.Path('out/report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+          print('downloaded',len(report))
+          PY
+          find out -type f | sort
+          du -sh out
+
+      - name: Upload security previews
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-tattoo-previews
+          path: out
+          compression-level: 6
+          if-no-files-found: error
+          retention-days: 1
