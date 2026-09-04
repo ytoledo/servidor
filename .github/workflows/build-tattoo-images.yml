@@ -1,4 +1,4 @@
-name: Build Tattoo Images
+name: Build Tattoo Expansion Sources
 
 on:
   push:
@@ -9,66 +9,65 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
-      - name: Build complete local tattoo preview pack
+      - name: Fetch public tattoo sources
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p pack/male pack/female
+          mkdir -p out/highres/male out/highres/female out/noxify out/sincity
 
-          wget -q -r -np -nd -A '*.png' -e robots=off -P pack/male \
-            'https://cdn.fivemetstore.com/realidadepaulista/imagens/nation_tattoos/male/'
-          wget -q -r -np -nd -A '*.png' -e robots=off -P pack/female \
-            'https://cdn.fivemetstore.com/realidadepaulista/imagens/nation_tattoos/female/'
-          find pack/male -maxdepth 1 -type f -regex '.*/[-0-9]+\.png' -delete || true
-          find pack/female -maxdepth 1 -type f -regex '.*/[-0-9]+\.png' -delete || true
+          git clone --depth 1 https://github.com/doiska/fivem-tattoo-shop.git /tmp/doiska
+          git clone --depth 1 https://github.com/untraceabledev/Noxify4.0TurkishScammer.git /tmp/noxify
+          git clone --depth 1 https://github.com/lnfernous/resources-frommain.git /tmp/resources
 
-          curl -L --fail --retry 3 \
-            'https://raw.githubusercontent.com/wasabirobby/fivem-appearance/main/files/tattoos.json' \
-            -o pack/tattoos.json
+          cp /tmp/doiska/config/tattoos.json out/doiska_tattoos.json
+          cp /tmp/doiska/shared/assets/zone_new_tattoos.json out/doiska_zone_new_tattoos.json
 
-          cat > /tmp/fetch_missing.py <<'PY'
-          import json, os, pathlib, urllib.request, concurrent.futures
-          root=pathlib.Path('pack')
-          data=json.load(open(root/'tattoos.json'))
-          tasks=[]
-          for arr in data.values():
-              for e in arr:
-                  for sex,key in [('male','hashMale'),('female','hashFemale')]:
-                      h=e.get(key) or ''
-                      if not h or (root/sex/f'{h}.png').exists():
-                          continue
-                      tasks.append((sex,h))
-          tasks=list(dict.fromkeys(tasks))
-          def get(item):
-              sex,h=item
-              url=f'https://www.lamborghini788.online/nation_tattoos/{sex}/{h}.png'
-              req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
-              try:
-                  with urllib.request.urlopen(req,timeout=8) as r:
-                      b=r.read()
-                  if len(b)>100 and b.startswith(b'\x89PNG'):
-                      (root/sex/f'{h}.png').write_bytes(b)
-                      return 1
-              except Exception:
-                  pass
-              return 0
-          with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex:
-              added=sum(ex.map(get,tasks))
-          print('missing candidates',len(tasks),'added from source B',added)
+          python - <<'PY'
+          import json, pathlib, shutil, os
+          src=pathlib.Path('/tmp/doiska/web/public/tattoos')
+          data=json.load(open('/tmp/doiska/config/tattoos.json'))
+          out=pathlib.Path('out/highres')
+          copied=0
+          for e in data:
+              img=(e.get('image') or '').replace('/tattoos/','')
+              p=src/img
+              if not img or not p.exists():
+                  continue
+              for sex,key in [('male','hashMale'),('female','hashFemale')]:
+                  h=e.get(key) or ''
+                  if not h:
+                      continue
+                  dst=out/sex/(h+'.webp')
+                  if not dst.exists():
+                      shutil.copy2(p,dst); copied+=1
+          print('highres copied',copied)
+          print('male',len(list((out/'male').glob('*.webp'))),'female',len(list((out/'female').glob('*.webp'))))
           PY
-          python /tmp/fetch_missing.py
 
-          echo "male=$(find pack/male -type f -name '*.png' | wc -l)"
-          echo "female=$(find pack/female -type f -name '*.png' | wc -l)"
-          du -sh pack
+          NP='/tmp/noxify/GTAServerFXS/server-data/resources/[assets]/np_tattoos'
+          cp "$NP/nikeztattoos_overlays.xml" out/noxify/
+          cp "$NP/shop_tattoo.meta" out/noxify/
+          cp "$NP/cl_names.lua" out/noxify/
+          cp -r "$NP/stream" out/noxify/
 
-      - name: Upload tattoo images
+          cp /tmp/resources/rcore_addon_tattoos_sincity/rcore_overlays_sincity.xml out/sincity/
+          cp /tmp/resources/rcore_addon_tattoos_sincity/fxmanifest.lua out/sincity/
+          cp -r /tmp/resources/rcore_addon_tattoos_sincity/stream out/sincity/
+          cp /tmp/resources/rcore_tattoo/assets/tattooLists/rcoreAddonTattoos_sincity.json out/sincity/
+
+          echo '--- sizes ---'
+          du -sh out/*
+          find out/highres -type f | wc -l
+          find out/noxify/stream -type f | wc -l
+          find out/sincity/stream -type f | wc -l
+
+      - name: Upload expansion sources
         uses: actions/upload-artifact@v4
         with:
-          name: creative-network-tattoo-images
-          path: pack
+          name: tattoo-expansion-sources
+          path: out
           compression-level: 6
           if-no-files-found: error
           retention-days: 1
