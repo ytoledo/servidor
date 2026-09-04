@@ -9,33 +9,18 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
-      - name: Download male and female tattoo previews
+      - name: Build complete local tattoo preview pack
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p pack/male pack/female
 
-          # Source A - stable legacy pack.
-          wget -q -r -np -nd -A '*.png' -e robots=off \
-            -P pack/male \
+          wget -q -r -np -nd -A '*.png' -e robots=off -P pack/male \
             'https://cdn.fivemetstore.com/realidadepaulista/imagens/nation_tattoos/male/'
-          wget -q -r -np -nd -A '*.png' -e robots=off \
-            -P pack/female \
+          wget -q -r -np -nd -A '*.png' -e robots=off -P pack/female \
             'https://cdn.fivemetstore.com/realidadepaulista/imagens/nation_tattoos/female/'
-
-          # Source B - contains later GTA Online tattoo packs. Merge only missing files.
-          mkdir -p extra/male extra/female
-          wget -q -r -np -nd -A '*.png' -e robots=off \
-            -P extra/male \
-            'https://www.lamborghini788.online/nation_tattoos/male/' || true
-          wget -q -r -np -nd -A '*.png' -e robots=off \
-            -P extra/female \
-            'https://www.lamborghini788.online/nation_tattoos/female/' || true
-          cp -n extra/male/*.png pack/male/ 2>/dev/null || true
-          cp -n extra/female/*.png pack/female/ 2>/dev/null || true
-
           find pack/male -maxdepth 1 -type f -regex '.*/[-0-9]+\.png' -delete || true
           find pack/female -maxdepth 1 -type f -regex '.*/[-0-9]+\.png' -delete || true
 
@@ -43,9 +28,40 @@ jobs:
             'https://raw.githubusercontent.com/wasabirobby/fivem-appearance/main/files/tattoos.json' \
             -o pack/tattoos.json
 
+          cat > /tmp/fetch_missing.py <<'PY'
+          import json, os, pathlib, urllib.request, concurrent.futures
+          root=pathlib.Path('pack')
+          data=json.load(open(root/'tattoos.json'))
+          tasks=[]
+          for arr in data.values():
+              for e in arr:
+                  for sex,key in [('male','hashMale'),('female','hashFemale')]:
+                      h=e.get(key) or ''
+                      if not h or (root/sex/f'{h}.png').exists():
+                          continue
+                      tasks.append((sex,h))
+          tasks=list(dict.fromkeys(tasks))
+          def get(item):
+              sex,h=item
+              url=f'https://www.lamborghini788.online/nation_tattoos/{sex}/{h}.png'
+              req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+              try:
+                  with urllib.request.urlopen(req,timeout=8) as r:
+                      b=r.read()
+                  if len(b)>100 and b.startswith(b'\x89PNG'):
+                      (root/sex/f'{h}.png').write_bytes(b)
+                      return 1
+              except Exception:
+                  pass
+              return 0
+          with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex:
+              added=sum(ex.map(get,tasks))
+          print('missing candidates',len(tasks),'added from source B',added)
+          PY
+          python /tmp/fetch_missing.py
+
           echo "male=$(find pack/male -type f -name '*.png' | wc -l)"
           echo "female=$(find pack/female -type f -name '*.png' | wc -l)"
-          test -s pack/tattoos.json
           du -sh pack
 
       - name: Upload tattoo images
