@@ -1,0 +1,245 @@
+name: Build Addon Tattoo Pack
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build-addon-tattoo-pack.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Collect source packs
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/ElixerDevelopment/MayhemTattoos.git src_mayhem
+          git clone --depth 1 https://github.com/arobase7sur7/7-judy-tattoo-pack.git src_judy
+          git clone --depth 1 https://github.com/josephwl1/TATTOO-FiveM-script.git src_joe
+          git clone --depth 1 https://github.com/00Kubi/fivem-tattoo-extractor.git extractor
+
+          New-Item -ItemType Directory -Force -Path packs\mayhem,packs\judy,packs\joe | Out-Null
+          Copy-Item -Recurse -Force src_mayhem\MayhemTattoosStandalone\* packs\mayhem\
+          Copy-Item -Recurse -Force src_judy\7-judy-tattoo-pack\* packs\judy\
+          Copy-Item -Force 'src_judy\illenium config.lua' packs\judy\illenium_config.lua
+          Copy-Item -Recurse -Force src_joe\JOE_tattooshop\* packs\joe\
+
+      - name: Build addon preview extractor
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path addoncli | Out-Null
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net8.0-windows</TargetFramework>
+              <Nullable>enable</Nullable>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <PlatformTarget>x64</PlatformTarget>
+            </PropertyGroup>
+            <ItemGroup>
+              <ProjectReference Include="..\extractor\fivem-tattoo-extractor.csproj" />
+            </ItemGroup>
+          </Project>
+          '@ | Set-Content -Encoding UTF8 addoncli\addoncli.csproj
+
+          @'
+          using System.Text.Json;
+          using FiveMTattooExtractor.Core;
+          using FiveMTattooExtractor.Models;
+
+          var root = Path.GetFullPath("packs");
+          var outputRoot = Path.GetFullPath("extracted");
+          Directory.CreateDirectory(outputRoot);
+          var all = new List<object>();
+
+          foreach (var packDir in Directory.GetDirectories(root))
+          {
+              var pack = Path.GetFileName(packDir);
+              var outDir = Path.Combine(outputRoot, pack);
+              Directory.CreateDirectory(outDir);
+              var options = new ExportOptions
+              {
+                  OutputFolder = outDir,
+                  Format = "png",
+                  Resolution = 256,
+                  Quality = 100,
+                  ExportMale = true,
+                  ExportFemale = true,
+                  PriceMultiplier = 1.0,
+                  BackgroundColor = "Przezroczyste (Transparent)",
+                  ExportCsv = false,
+                  ExportTypeScript = false,
+                  ExportFrameworkConfigs = false,
+                  CreateZipArchive = false
+              };
+              Console.WriteLine($"=== {pack} ===");
+              var items = CustomAddonScanner.ScanAddonFolder(packDir, outDir, "png", options, Console.WriteLine);
+              int ok = 0;
+              foreach (var item in items)
+              {
+                  try
+                  {
+                      Directory.CreateDirectory(Path.GetDirectoryName(item.OutputPath)!);
+                      ImageExporter.Save(item.Texture, item.OutputPath, "png", 256, 100, options.BackgroundColor);
+                      ok++;
+                      all.Add(new {
+                          pack,
+                          item.Gender,
+                          item.Zone,
+                          item.RawZone,
+                          item.Collection,
+                          item.Preset,
+                          item.Label,
+                          item.YtdName,
+                          item.TextureName,
+                          output = Path.GetRelativePath(outputRoot,item.OutputPath).Replace('\\','/')
+                      });
+                  }
+                  catch (Exception ex)
+                  {
+                      Console.WriteLine($"ERR {pack} {item.YtdName} {item.TextureName}: {ex.Message}");
+                  }
+              }
+              Console.WriteLine($"{pack}: exported {ok}/{items.Count}");
+          }
+          File.WriteAllText(Path.Combine(outputRoot,"extract_manifest.json"),JsonSerializer.Serialize(all,new JsonSerializerOptions{WriteIndented=true}));
+          '@ | Set-Content -Encoding UTF8 addoncli\Program.cs
+
+          dotnet run --project addoncli\addoncli.csproj -c Release
+
+      - name: Normalize overlays and previews
+        shell: pwsh
+        run: |
+          @'
+          import os, re, json, shutil, xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          ROOT=Path('.')
+          OUT=ROOT/'normalized'
+          (OUT/'stream').mkdir(parents=True,exist_ok=True)
+          (OUT/'data').mkdir(parents=True,exist_ok=True)
+          (OUT/'previews'/'male').mkdir(parents=True,exist_ok=True)
+          (OUT/'previews'/'female').mkdir(parents=True,exist_ok=True)
+
+          pack_cfg={
+            'mayhem': {'collection':'tattoos_overlay','overlay':Path('packs/mayhem/tattoos_overlay.xml')},
+            'judy': {'collection':'judy_overlays','overlay':Path('packs/judy/overlays.xml')},
+            'joe': {'collection':'joe_overlays','overlay':Path('packs/joe/meta/joe_overlays.xml')},
+          }
+
+          label_maps={p:{} for p in pack_cfg}
+          try:
+            data=json.load(open('src_mayhem/MayhemTattoosESX/tattooList.json',encoding='utf-8'))
+            for x in data:
+              for k in ('hashMale','hashFemale'):
+                if x.get(k): label_maps['mayhem'][x[k].lower()]=x.get('name') or x[k]
+          except Exception as e: print('mayhem labels',e)
+
+          try:
+            txt=Path('packs/judy/illenium_config.lua').read_text(encoding='utf-8',errors='ignore')
+            blocks=re.findall(r'\{(.*?)\}',txt,re.S)
+            for b in blocks:
+              hm=re.search(r'hash(?:Female|Male)\s*=\s*"([^"]+)"',b)
+              lb=re.search(r'label\s*=\s*"([^"]+)"',b)
+              if hm: label_maps['judy'][hm.group(1).lower()]=(lb.group(1) if lb else hm.group(1))
+          except Exception as e: print('judy labels',e)
+
+          extract=json.load(open('extracted/extract_manifest.json',encoding='utf-8'))
+          by_pack={p:[] for p in pack_cfg}
+          for r in extract: by_pack.setdefault(r['pack'],[]).append(r)
+
+          def norm(s): return re.sub(r'[^a-z0-9]+','',s.lower())
+          def human(s):
+            s=re.sub(r'_(?:M|F)$','',s,flags=re.I)
+            s=s.replace('_',' ')
+            s=re.sub(r'\bTat\b','',s,flags=re.I)
+            s=re.sub(r'\s+',' ',s).strip()
+            return s.title()
+          def cat(zone):
+            return {'ZONE_TORSO':'torso','ZONE_HEAD':'head','ZONE_LEFT_ARM':'leftarm','ZONE_RIGHT_ARM':'rightarm','ZONE_LEFT_LEG':'leftleg','ZONE_RIGHT_LEG':'rightleg'}.get(zone)
+
+          manifest=[]
+          missing=[]
+          for pack,cfg in pack_cfg.items():
+            ov=cfg['overlay']
+            if not ov.exists():
+              print('missing overlay',ov); continue
+            # copy overlay with collection-compatible filename
+            dst=OUT/'data'/(cfg['collection']+'.xml')
+            shutil.copy2(ov,dst)
+            root=ET.parse(ov).getroot()
+            for item in root.findall('.//presets/Item'):
+              def text(tag):
+                e=item.find(tag); return (e.text or '').strip() if e is not None else ''
+              name=text('nameHash'); txd=text('txdHash'); txt=text('txtHash'); zone=text('zone'); gender=text('gender') or 'GENDER_DONTCARE'
+              category=cat(zone)
+              if not name or not category: continue
+              sexes=[]
+              if gender in ('GENDER_MALE','GENDER_DONTCARE'): sexes.append('male')
+              if gender in ('GENDER_FEMALE','GENDER_DONTCARE'): sexes.append('female')
+              label=label_maps.get(pack,{}).get(name.lower()) or human(name)
+              for sex in sexes:
+                candidates=[]
+                for r in by_pack.get(pack,[]):
+                  if r.get('Gender')!=sex: continue
+                  score=0
+                  vals=[r.get('TextureName',''),r.get('Preset',''),Path(r.get('YtdName','')).stem]
+                  for target in (txt,txd,name):
+                    for v in vals:
+                      if target and v and norm(target)==norm(v): score=max(score,100)
+                      elif target and v and norm(target) in norm(v): score=max(score,70)
+                      elif target and v and norm(v) in norm(target): score=max(score,60)
+                  if score: candidates.append((score,r))
+                if not candidates:
+                  # fallback: same ytd/txd, regardless of inferred gender
+                  for r in by_pack.get(pack,[]):
+                    vals=[r.get('TextureName',''),r.get('Preset',''),Path(r.get('YtdName','')).stem]
+                    score=max([100 if target and v and norm(target)==norm(v) else 0 for target in (txt,txd) for v in vals] or [0])
+                    if score: candidates.append((score,r))
+                preview_rel=''
+                if candidates:
+                  candidates.sort(key=lambda x:x[0],reverse=True)
+                  src=Path('extracted')/candidates[0][1]['output']
+                  if src.exists():
+                    pdst=OUT/'previews'/sex/(name+'.png')
+                    shutil.copy2(src,pdst)
+                    preview_rel=f'previews/{sex}/{name}.png'
+                if not preview_rel: missing.append({'pack':pack,'sex':sex,'name':name,'txd':txd,'txt':txt})
+                manifest.append({'pack':pack,'sex':sex,'category':category,'name':name,'part':cfg['collection'],'label':label,'zone':zone,'txd':txd,'txt':txt,'preview':preview_rel})
+
+          # copy unique YTD assets
+          for pack in pack_cfg:
+            for ytd in Path('packs',pack).rglob('*.ytd'):
+              target=OUT/'stream'/ytd.name
+              if target.exists() and target.read_bytes()!=ytd.read_bytes():
+                target=OUT/'stream'/(pack+'_'+ytd.name)
+              shutil.copy2(ytd,target)
+
+          json.dump(manifest,open(OUT/'addons_manifest.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)
+          json.dump(missing,open(OUT/'missing_previews.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)
+          report={
+            'entries':len(manifest),
+            'male':sum(x['sex']=='male' for x in manifest),
+            'female':sum(x['sex']=='female' for x in manifest),
+            'previews':sum(bool(x['preview']) for x in manifest),
+            'missing_previews':len(missing),
+            'ytd_files':len(list((OUT/'stream').glob('*.ytd'))),
+            'by_category':{c:sum(x['category']==c for x in manifest) for c in ['torso','head','leftarm','rightarm','leftleg','rightleg']}
+          }
+          json.dump(report,open(OUT/'report.json','w',encoding='utf-8'),indent=2)
+          print(json.dumps(report,indent=2))
+          if missing:
+            print('Missing preview examples:',missing[:20])
+          '@ | Set-Content -Encoding UTF8 normalize.py
+          python normalize.py
+
+      - name: Upload normalized addon pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: addon-tattoo-pack-normalized
+          path: normalized
+          compression-level: 6
+          if-no-files-found: error
+          retention-days: 1
